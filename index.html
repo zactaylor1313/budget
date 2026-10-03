@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Budget</title>
+<style>
+  :root{
+    --bg:#12151c; --panel:#1b2029; --line:#2b3342; --ink:#e8ecf3;
+    --dim:#94a1b8; --accent:#5fa8ff; --good:#3ddc97; --warn:#ffcc66; --bad:#ff7a7a;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    padding:28px 16px 60px;
+  }
+  .wrap{max-width:980px;margin:0 auto}
+  h1{font-size:22px;font-weight:600;margin:0 0 4px}
+  .sub{color:var(--dim);font-size:13px;margin-bottom:22px}
+
+  /* ---- gate ---- */
+  #gate{max-width:400px;margin:12vh auto 0;text-align:center}
+  #gate h1{margin-bottom:10px}
+  #gate p{color:var(--dim);font-size:14px;margin:0 0 20px}
+  #pass{
+    width:100%;padding:13px 14px;font-size:16px;border-radius:10px;
+    border:1px solid var(--line);background:var(--panel);color:var(--ink);
+  }
+  #pass:focus{outline:2px solid var(--accent);outline-offset:1px}
+  #go{
+    width:100%;margin-top:12px;padding:13px;font-size:15px;font-weight:600;
+    border:0;border-radius:10px;background:var(--accent);color:#08111f;cursor:pointer;
+  }
+  #go:hover{filter:brightness(1.08)}
+  #err{color:var(--bad);font-size:13px;margin-top:12px;min-height:18px}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid #08111f33;
+        border-top-color:#08111f;border-radius:50%;animation:s .7s linear infinite;
+        vertical-align:-2px;margin-right:7px}
+  @keyframes s{to{transform:rotate(360deg)}}
+
+  /* ---- dashboard ---- */
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:22px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px 16px}
+  .card .k{color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+  .card .v{font-size:24px;font-weight:650;margin-top:5px}
+  .pos{color:var(--good)} .neg{color:var(--bad)} .neu{color:var(--warn)}
+
+  section{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin-bottom:16px;overflow:hidden}
+  section h2{font-size:14px;font-weight:600;margin:0;padding:13px 16px;border-bottom:1px solid var(--line);
+             text-transform:uppercase;letter-spacing:.05em;color:var(--dim)}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{padding:9px 16px;text-align:left;border-bottom:1px solid #232a36}
+  th{font-size:12px;color:var(--dim);font-weight:500;text-transform:uppercase;letter-spacing:.04em}
+  tr:last-child td{border-bottom:0}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  .bar{height:6px;border-radius:3px;background:#2b3342;overflow:hidden;margin-top:6px}
+  .bar span{display:block;height:100%;background:var(--accent)}
+  .foot{color:var(--dim);font-size:12px;margin-top:22px;line-height:1.6}
+  .pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;
+        background:#2b3342;color:var(--dim);vertical-align:middle;margin-left:8px}
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <h1>Budget</h1>
+  <p>This page is encrypted. Enter the passphrase to unlock it.</p>
+  <input id="pass" type="password" autocomplete="current-password"
+         placeholder="Passphrase" spellcheck="false">
+  <button id="go">Unlock</button>
+  <div id="err"></div>
+</div>
+
+<div id="out" class="wrap" style="display:none"></div>
+
+<script>
+const BLOB_URL = "payload.json";
+
+function b64d(s){
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i);
+  return out;
+}
+
+async function decrypt(passphrase, blob){
+  const enc = new TextEncoder();
+  const salt = b64d(blob.salt), iv = b64d(blob.iv), ct = b64d(blob.ct);
+  const baseKey = await crypto.subtle.importKey("raw", enc.encode(passphrase),
+                       {name:"PBKDF2"}, false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey(
+      {name:"PBKDF2", salt, iterations:blob.iter, hash:"SHA-256"},
+      baseKey, {name:"AES-GCM", length:256}, false, ["decrypt"]);
+  const pt = await crypto.subtle.decrypt({name:"AES-GCM", iv}, key, ct);
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+
+const money = n => "$" + (n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+
+function render(d){
+  const income   = d.income.reduce((s,i)=>s+i.amount,0);
+  const bills    = d.bills.reduce((s,b)=>s+b.amount,0);
+  const variable = d.variable.reduce((s,v)=>s+v.monthly,0);
+  const total    = bills + variable;
+  const left     = income - total;
+  const pct      = income ? Math.min(100, Math.round(total/income*100)) : 0;
+
+  const cards = `
+    <div class="cards">
+      <div class="card"><div class="k">Monthly income</div><div class="v pos">${money(income)}</div></div>
+      <div class="card"><div class="k">Fixed bills</div><div class="v">${money(bills)}</div></div>
+      <div class="card"><div class="k">Variable</div><div class="v">${money(variable)}</div></div>
+      <div class="card"><div class="k">Left over</div>
+        <div class="v ${left>=0?'pos':'neg'}">${money(left)}</div>
+        <div class="bar"><span style="width:${pct}%;background:${pct>100?'#ff7a7a':'#5fa8ff'}"></span></div>
+      </div>
+    </div>`;
+
+  const inc = `<section><h2>Income</h2><table>
+    <tr><th>Source</th><th class="num">Monthly</th></tr>
+    ${d.income.map(i=>`<tr><td>${i.source}${i.note?` <span class="pill">${i.note}</span>`:''}</td>
+       <td class="num">${money(i.amount)}</td></tr>`).join('')}
+    <tr><td><strong>Total</strong></td><td class="num"><strong>${money(income)}</strong></td></tr>
+  </table></section>`;
+
+  const tags = {};
+  d.bills.forEach(b=>{ (tags[b.category||"Other"] ||= []).push(b); });
+
+  const billSecs = Object.keys(tags).map(cat => `<section><h2>${cat}</h2><table>
+      <tr><th>Bill</th><th class="num">Due</th><th class="num">Amount</th></tr>
+      ${tags[cat].slice().sort((a,b)=>(a.dueDay||99)-(b.dueDay||99)).map(b=>
+        `<tr><td>${b.name}</td><td class="num">${b.dueDay||'-'}</td>
+         <td class="num">${money(b.amount)}</td></tr>`).join('')}
+    </table></section>`).join('');
+
+  const vari = `<section><h2>Variable</h2><table>
+    <tr><th>Item</th><th class="num">Monthly</th></tr>
+    ${d.variable.map(v=>`<tr><td>${v.name}</td><td class="num">${money(v.monthly)}</td></tr>`).join('')}
+  </table></section>`;
+
+  document.getElementById('out').innerHTML = `
+    <h1>Budget</h1>
+    <div class="sub">Generated ${d.generated} &middot; ${d.note||''}</div>
+    ${cards}${inc}${billSecs}${vari}
+    <div class="foot">
+      Encrypted with AES-256-GCM. The passphrase is never stored or transmitted;
+      decryption happens entirely in this browser.
+    </div>`;
+  document.getElementById('gate').style.display='none';
+  document.getElementById('out').style.display='block';
+}
+
+async function unlock(){
+  const btn = document.getElementById('go');
+  const err = document.getElementById('err');
+  const pass = document.getElementById('pass').value;
+  err.textContent = '';
+  if (!pass){ err.textContent = 'Enter the passphrase.'; return; }
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Unlocking';
+  try{
+    const blob = await (await fetch(BLOB_URL, {cache:'no-store'})).json();
+    const data = await decrypt(pass, blob);
+    render(data);
+  }catch(e){
+    err.textContent = 'Wrong passphrase.';
+    btn.disabled = false;
+    btn.textContent = 'Unlock';
+  }
+}
+
+document.getElementById('go').addEventListener('click', unlock);
+document.getElementById('pass').addEventListener('keydown', e=>{ if(e.key==='Enter') unlock(); });
+document.getElementById('pass').focus();
+</script>
+</body>
+</html>
